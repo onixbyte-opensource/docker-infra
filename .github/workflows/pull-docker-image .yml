@@ -1,0 +1,92 @@
+name: Pull Docker Image and Export Tar
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Docker image to pull (e.g., nginx:latest, outlinewiki/outline:latest)'
+        required: true
+        type: string
+      registry:
+        description: 'Docker registry (default: docker.io)'
+        required: false
+        default: 'docker.io'
+        type: string
+      filename:
+        description: 'Output tar filename (default: auto-generated)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  pull-and-export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up variables
+        id: vars
+        env:
+          INPUT_IMAGE: ${{ inputs.image }}
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          INPUT_FILENAME: ${{ inputs.filename }}
+        run: |
+          IMAGE="$INPUT_IMAGE"
+          REGISTRY="$INPUT_REGISTRY"
+          
+          # Generate filename if not provided
+          if [ -z "$INPUT_FILENAME" ]; then
+            # Convert image name to valid filename
+            SAFE_NAME=$(echo "$IMAGE" | tr '/:' '--')
+            FILENAME="${SAFE_NAME}.tar"
+          else
+            FILENAME="$INPUT_FILENAME"
+          fi
+          
+          # Validate inputs - reject if containing suspicious characters
+          if [[ "$IMAGE" =~ [^a-zA-Z0-9_./:-] ]]; then
+            echo "Error: Image name contains invalid characters"
+            exit 1
+          fi
+          
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+          echo "registry=$REGISTRY" >> $GITHUB_OUTPUT
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          echo "full_image=$REGISTRY/$IMAGE" >> $GITHUB_OUTPUT
+          
+          echo "Pulling: $REGISTRY/$IMAGE"
+          echo "Output: $FILENAME"
+
+      - name: Pull Docker image
+        run: |
+          docker pull ${{ steps.vars.outputs.full_image }}
+
+      - name: Export image to tar
+        run: |
+          docker save ${{ steps.vars.outputs.full_image }} -o ${{ steps.vars.outputs.filename }}
+          ls -lh ${{ steps.vars.outputs.filename }}
+
+      - name: Compress tar with gzip (optional)
+        run: |
+          gzip -k ${{ steps.vars.outputs.filename }}
+          ls -lh ${{ steps.vars.outputs.filename }}*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ github.run_id }}
+          path: |
+            ${{ steps.vars.outputs.filename }}
+            ${{ steps.vars.outputs.filename }}.gz
+          retention-days: 7
+
+      - name: Summary
+        run: |
+          echo "## Docker Image Export Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image | \`${{ steps.vars.outputs.full_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tar file | \`${{ steps.vars.outputs.filename }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Compressed | \`${{ steps.vars.outputs.filename }}.gz\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Download Instructions" >> $GITHUB_STEP_SUMMARY
+          echo "Go to **Actions** → **${{ github.workflow }}** → **${{ github.run_id }}** → **Artifacts** to download." >> $GITHUB_STEP_SUMMARY
